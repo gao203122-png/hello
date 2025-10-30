@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.log
+*.zip
+*.tar
+*.gz
+*.pth
+*.pt
+*.onnx
+checkpoints/
+weights/
+runs/
+output/
+datasets/
+data/

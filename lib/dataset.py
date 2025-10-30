@@ -9,8 +9,9 @@ from torchvision import transforms as T
 
 to_rgb_tensor = T.Compose([T.ToTensor(), T.Resize((256, 256))])
 to_depth_tensor = T.Compose([
-    T.Lambda(lambda x: np.array(x, dtype=np.float32) / x.max()),  # 先归一化
-    T.ToTensor(),                                                 # 再转 float
+    T.Lambda(lambda x: torch.from_numpy(
+        np.array(x, dtype=np.float32) / np.array(x).max()
+    ).unsqueeze(0)),   # ← 扩维成 1×H×W
     T.Resize((256, 256))
 ])
 
@@ -70,10 +71,10 @@ class TrackingDataset(Dataset):
         
         # 返回张量
         return {
-            'template_rgb': to_tensor(template_rgb),
-            'template_depth': to_tensor(template_depth),
-            'search_rgb': to_tensor(search_rgb),
-            'search_depth': to_tensor(search_depth),
+            'template_rgb':   template_rgb,      # 已经是 Tensor
+            'template_depth': template_depth,    # 已经是 Tensor
+            'search_rgb':     search_rgb,        # 已经是 Tensor
+            'search_depth':   search_depth,      # 已经是 Tensor
             'text': text,
             'bbox': torch.tensor(bboxes[search_idx], dtype=torch.float32)
         }

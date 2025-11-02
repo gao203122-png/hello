@@ -54,8 +54,8 @@ def quick_train():
         print(f"Epoch {epoch:02d}  Avg-Loss: {avg_loss:.6f}")
 
         # 3. 每 10 轮保存权重（供后面推理用）
-        if epoch % 10 == 0 or epoch == 49:
-            ckpt_path = f'outputs/exp1/ckpt/epoch{epoch}.pth'
+        if epoch % 5 == 0 or epoch == 49:
+            ckpt_path = f'outputs/exp1/ckpt2/epoch{epoch}.pth'
             torch.save(model.state_dict(), ckpt_path)
             print(f"  →  saved {ckpt_path}")
 

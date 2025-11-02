@@ -117,96 +117,179 @@
 #         bbox = self.bbox_head(search_feat)
         
 #         return bbox, response_map
-
-# models/tracker.py
+# models/tracker.py - 基于JVG架构重构
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from models.backbone import RGBDBackbone
-from models.fusion import MultiModalFusion
 from models.text_encoder import TextEncoder
 
+class MSRM(nn.Module):
+    """多源关系建模模块(简化版JVG)"""
+    def __init__(self, dim=256, nhead=8, num_layers=3):
+        super().__init__()
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=dim, nhead=nhead, dim_feedforward=dim*4, 
+            dropout=0.1, activation="gelu", batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers)
+        self.pos_embed = nn.Parameter(torch.randn(1, 1024, dim) * 0.02)
+        
+    def forward(self, lang_tokens, template_tokens, search_tokens):
+        """
+        Args:
+            lang_tokens: [B, L_l, D] 文本特征
+            template_tokens: [B, L_z, D] 模板tokens
+            search_tokens: [B, L_t, D] 搜索tokens
+        """
+        B = lang_tokens.shape[0]
+        # 拼接所有tokens
+        all_tokens = torch.cat([lang_tokens, template_tokens, search_tokens], dim=1)
+        L = all_tokens.shape[1]
+        
+        # 位置编码
+        pos = self.pos_embed[:, :L, :].expand(B, -1, -1)
+        all_tokens = all_tokens + pos
+        
+        # Transformer编码
+        enhanced = self.transformer(all_tokens)
+        
+        # 分割输出
+        L_l, L_z = lang_tokens.shape[1], template_tokens.shape[1]
+        hl = enhanced[:, :L_l, :]
+        hz = enhanced[:, L_l:L_l+L_z, :]
+        ht = enhanced[:, L_l+L_z:, :]
+        
+        return hl, hz, ht
+
+class TargetDecoder(nn.Module):
+    """目标解码器"""
+    def __init__(self, dim=256, nhead=8, num_layers=2):
+        super().__init__()
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=dim, nhead=nhead, dim_feedforward=dim*4,
+            dropout=0.1, activation="gelu", batch_first=True
+        )
+        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers)
+        self.target_query = nn.Parameter(torch.randn(1, 1, dim) * 0.02)
+        
+    def forward(self, ht, text_feat):
+        """
+        Args:
+            ht: [B, L_t, D] 增强后的搜索tokens
+            text_feat: [B, D] 文本特征(用于初始化query)
+        """
+        B = ht.shape[0]
+        tq = self.target_query.expand(B, -1, -1)  # [B,1,D]
+        
+        # 用文本特征增强query
+        tq = tq + text_feat.unsqueeze(1)
+        
+        # 解码
+        dec_out = self.decoder(tq, ht)  # [B,1,D]
+        return dec_out
+
+class LocalizationHead(nn.Module):
+    """定位头(相似度加权+MLP回归)"""
+    def __init__(self, dim=256):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, dim),
+            nn.ReLU(),
+            nn.Linear(dim, dim//2),
+            nn.ReLU(),
+            nn.Linear(dim//2, 4)
+        )
+        
+    def forward(self, dec_out, ht):
+        """
+        Args:
+            dec_out: [B, 1, D] 解码器输出
+            ht: [B, L_t, D] 搜索tokens
+        Returns:
+            bbox: [B, 4] 归一化的[cx,cy,w,h]
+        """
+        query = dec_out.squeeze(1)  # [B,D]
+        
+        # 计算相似度注意力
+        scores = F.cosine_similarity(query.unsqueeze(1), ht, dim=-1)  # [B,L_t]
+        attn = F.softmax(scores, dim=-1).unsqueeze(-1)  # [B,L_t,1]
+        
+        # 加权池化
+        target_feat = (attn * ht).sum(dim=1)  # [B,D]
+        
+        # 回归bbox
+        bbox = self.mlp(target_feat)  # [B,4]
+        bbox = torch.sigmoid(bbox)  # 归一化到[0,1]
+        
+        return bbox
+
 class RGBDTextTracker(nn.Module):
+    """完整的RGB-D-Text跟踪器(基于JVG架构)"""
     def __init__(self):
         super().__init__()
         
         self.backbone = RGBDBackbone()
         self.text_encoder = TextEncoder()
-        self.fusion = MultiModalFusion(visual_dim=256, text_dim=512)
         
-        # ===== 关键改进1：模板-搜索相关性模块 =====
-        self.correlation = nn.Sequential(
-            nn.Conv2d(256, 128, 1),
-            nn.BatchNorm2d(128),
+        # RGB-D融合(Early Fusion)
+        self.rgbd_fusion = nn.Sequential(
+            nn.Conv2d(512, 256, 1),  # 256+256->256
+            nn.BatchNorm2d(256),
             nn.ReLU()
         )
         
-        # ===== 关键改进2：位置敏感的响应图 =====
-        self.response_head = nn.Sequential(
-            nn.Conv2d(128, 64, 3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 1, 1),
-            nn.Sigmoid()
-        )
+        # === 核心模块 ===
+        self.msrm = MSRM(dim=256, nhead=8, num_layers=3)
+        self.decoder = TargetDecoder(dim=256, nhead=8, num_layers=2)
+        self.loc_head = LocalizationHead(dim=256)
         
-        # ===== 关键改进3：空间保持的bbox回归 =====
-        self.bbox_head = nn.Sequential(
-            nn.Conv2d(128, 64, 3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 4, 1)  # 输出4通道热力图
-        )
+        # 文本投影
+        self.text_proj = nn.Linear(512, 256)
         
-    def compute_correlation(self, template_feat, search_feat):
-        """计算模板与搜索区域的相关性"""
-        B, C, Ht, Wt = template_feat.shape
-        _, _, Hs, Ws = search_feat.shape
-        
-        # 全局池化模板特征作为kernel
-        template_kernel = F.adaptive_avg_pool2d(template_feat, 1)  # [B,C,1,1]
-        
-        # 深度可分离卷积模拟相关操作
-        corr_feat = search_feat * template_kernel  # 广播乘法
-        corr_feat = self.correlation(corr_feat)
-        
-        return corr_feat
-        
-    def forward(self, template_rgb, template_depth, text, search_rgb, search_depth):
-        # 提取特征
-        temp_rgb_feat, temp_depth_feat = self.backbone(template_rgb, template_depth)
-        text_feat = self.text_encoder(text)
-        temp_feat = self.fusion(temp_rgb_feat, temp_depth_feat, text_feat)
-        
-        search_rgb_feat, search_depth_feat = self.backbone(search_rgb, search_depth)
-        search_feat = self.fusion(search_rgb_feat, search_depth_feat, text_feat)
-        
-        # ===== 核心：相关性匹配 =====
-        corr_feat = self.compute_correlation(temp_feat, search_feat)  # [B,128,H,W]
-        
-        # 响应图
-        response_map = self.response_head(corr_feat)  # [B,1,H,W]
-        
-        # bbox回归（空间保持）
-        bbox_map = self.bbox_head(corr_feat)  # [B,4,H,W]
-        
-        # ===== 从响应图中提取bbox =====
-        bbox = self.extract_bbox_from_map(bbox_map, response_map)
-        
-        return bbox, response_map
+    def extract_tokens(self, rgbd_feat):
+        """将特征图转换为tokens"""
+        B, C, H, W = rgbd_feat.shape
+        tokens = rgbd_feat.flatten(2).transpose(1, 2)  # [B, H*W, C]
+        return tokens
     
-    def extract_bbox_from_map(self, bbox_map, response_map):
-        """从空间热力图中提取最终bbox"""
-        B, _, H, W = bbox_map.shape
+    def forward(self, template_rgb, template_depth, text, search_rgb, search_depth):
+        """
+        Args:
+            template_rgb/depth: [B, C, H, W]
+            text: list of strings
+            search_rgb/depth: [B, C, H, W]
+        """
+        # === 1. 特征提取 ===
+        temp_rgb, temp_depth = self.backbone(template_rgb, template_depth)
+        temp_fused = self.rgbd_fusion(torch.cat([temp_rgb, temp_depth], dim=1))
         
-        # 找到响应最大的位置
-        response_flat = response_map.view(B, -1)
-        max_idx = response_flat.argmax(dim=1)
+        search_rgb, search_depth = self.backbone(search_rgb, search_depth)
+        search_fused = self.rgbd_fusion(torch.cat([search_rgb, search_depth], dim=1))
         
-        # 提取对应位置的bbox
-        bbox_flat = bbox_map.view(B, 4, -1)
-        bbox = torch.stack([bbox_flat[i, :, max_idx[i]] for i in range(B)])
+        # === 2. 转换为tokens ===
+        temp_tokens = self.extract_tokens(temp_fused)    # [B, L_z, 256]
+        search_tokens = self.extract_tokens(search_fused)  # [B, L_t, 256]
         
-        # 缩放到图像尺寸（假设输入256x256）
-        bbox = bbox * 256.0
+        # === 3. 文本特征 ===
+        text_feat = self.text_encoder(text)  # [B, 512]
+        text_proj = self.text_proj(text_feat)  # [B, 256]
+        lang_tokens = text_proj.unsqueeze(1)  # [B, 1, 256]
+        
+        # === 4. MSRM多源关系建模 ===
+        hl, hz, ht = self.msrm(lang_tokens, temp_tokens, search_tokens)
+        
+        # === 5. 目标解码 ===
+        dec_out = self.decoder(ht, text_proj)  # [B, 1, 256]
+        
+        # === 6. 定位 ===
+        bbox_norm = self.loc_head(dec_out, ht)  # [B, 4] 归一化
+        
+        # 转换为图像坐标(假设256x256)
+        bbox = bbox_norm * 256.0
         bbox = torch.clamp(bbox, 0, 256)
         
-        return bbox
+        # 生成伪响应图(用于loss计算)
+        response = None
+        
+        return bbox, response

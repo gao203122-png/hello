@@ -133,7 +133,7 @@ class MSRM(nn.Module):
             dropout=0.1, activation="gelu", batch_first=True
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers)
-        self.pos_embed = nn.Parameter(torch.randn(1, 1024, dim) * 0.02)
+        self.pos_embed = nn.Parameter(torch.randn(1, 4096, dim) * 0.02)
         
     def forward(self, lang_tokens, template_tokens, search_tokens):
         """

@@ -7,6 +7,14 @@ from torch.utils.data import Dataset
 import numpy as np
 from torchvision import transforms as T
 
+train_transform = T.Compose([
+    T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+    T.RandomGrayscale(p=0.1),
+    T.Resize((256, 256)),
+    T.ToTensor(),
+    T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+])
+
 to_rgb_tensor = T.Compose([T.ToTensor(), T.Resize((256, 256))])
 to_depth_tensor = T.Compose([
     T.Lambda(lambda x: torch.from_numpy(
@@ -16,68 +24,6 @@ to_depth_tensor = T.Compose([
 ])
 
 class TrackingDataset(Dataset):
-    # def __init__(self, data_root='/data/depth/aic25', split='train'):
-    #     self.data_root = os.path.join(data_root, split)
-    #     self.sequences = self._load_sequences()
-
-    # def _load_sequences(self):
-    #     sequences = []
-    #     # 先拿到所有 nlp.txt，再反推序列根目录
-    #     for text_path in sorted(glob.glob(f"{self.data_root}/**/nlp.txt", recursive=True)):
-    #         seq_dir     = os.path.dirname(text_path)
-    #         rgb_paths   = sorted(glob.glob(f"{seq_dir}/color/*.jpg"))
-    #         depth_paths = sorted(glob.glob(f"{seq_dir}/depth/*.png"))
-    #         gt_path     = f"{seq_dir}/groundtruth_rect.txt"   # ← 只改这里
-    #         # ↓↓↓ 调试：看哪一步为空
-    #         print(f"DIR {seq_dir}  color={len(rgb_paths)}  depth={len(depth_paths)}  gt={os.path.exists(gt_path)}")
-    #         if rgb_paths and depth_paths and os.path.exists(text_path) and os.path.exists(gt_path):
-    #             sequences.append({
-    #                 'rgb': rgb_paths,
-    #                 'depth': depth_paths,
-    #                 'text': text_path,
-    #                 'gt': gt_path,
-    #                 'name': os.path.basename(seq_dir.rstrip('/'))
-    #             })
-    #     return sequences
-
-    # def __len__(self):
-    #     return len(self.sequences)
-
-    # def __getitem__(self, idx):
-    #     seq = self.sequences[idx]
-
-    #     # 文本
-    #     with open(seq['text'], 'r') as f:
-    #         text = f.read().strip()
-
-    #     # GT 框
-    #     with open(seq['gt'], 'r') as f:
-    #         bboxes = [list(map(float, line.strip().split(','))) for line in f]
-
-    #     # 模板：第一帧
-    #     template_rgb   = Image.open(seq['rgb'][0]).convert('RGB')
-    #     template_depth = Image.open(seq['depth'][0])
-
-    #     # 搜索：随机帧
-    #     search_idx = np.random.randint(1, len(seq['rgb']))
-    #     search_rgb   = Image.open(seq['rgb'][search_idx]).convert('RGB')
-    #     search_depth = Image.open(seq['depth'][search_idx])
-
-    #     # ↓↓↓ 分开转 tensor ↓↓↓
-    #     template_rgb   = to_rgb_tensor(template_rgb)
-    #     template_depth = to_depth_tensor(template_depth)
-    #     search_rgb     = to_rgb_tensor(search_rgb)
-    #     search_depth   = to_depth_tensor(search_depth)
-        
-    #     # 返回张量
-    #     return {
-    #         'template_rgb':   template_rgb,      # 已经是 Tensor
-    #         'template_depth': template_depth,    # 已经是 Tensor
-    #         'search_rgb':     search_rgb,        # 已经是 Tensor
-    #         'search_depth':   search_depth,      # 已经是 Tensor
-    #         'text': text,
-    #         'bbox': torch.tensor(bboxes[search_idx], dtype=torch.float32)
-    #     }
     def __init__(self, data_root='/data/depth/aic25', split='train', k=20):
         self.data_root = os.path.join(data_root, split)
         self.k = k                                    # 每序列抽 k 帧
@@ -109,14 +55,16 @@ class TrackingDataset(Dataset):
         seq_idx, frm_idx = self.samples[idx]
         seq = self.sequences[seq_idx]
 
-        # 固定模板：第 0 帧
-        tpl_rgb   = to_rgb_tensor(Image.open(seq['rgb'][0]).convert('RGB'))
-        tpl_dep   = to_depth_tensor(Image.open(seq['depth'][0]))
+        # 模板：第 0 帧（训练增强）
+        tpl_img = Image.open(seq['rgb'][0]).convert('RGB')
+        tpl_rgb = train_transform(tpl_img)
+        tpl_dep = to_depth_tensor(Image.open(seq['depth'][0]))
 
-        # 搜索图：当前抽帧
-        sr_rgb   = to_rgb_tensor(Image.open(seq['rgb'][frm_idx]).convert('RGB'))
-        sr_dep   = to_depth_tensor(Image.open(seq['depth'][frm_idx]))
-
+        # 搜索图：当前抽帧（训练增强）
+        sr_img = Image.open(seq['rgb'][frm_idx]).convert('RGB')
+        sr_rgb = train_transform(sr_img)
+        sr_dep = to_depth_tensor(Image.open(seq['depth'][frm_idx]))
+        
         # GT 框
         with open(seq['gt'], 'r') as f:
             bboxes = [list(map(float, line.strip().split(','))) for line in f]

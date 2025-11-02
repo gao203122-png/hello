@@ -53,45 +53,94 @@
 
 
 #777
+# # models/fusion.py
+# import torch
+# import torch.nn as nn
+# import torch.nn.functional as F
+
+# class MultiModalFusion(nn.Module):
+#     """三模态特征融合模块"""
+#     def __init__(self, visual_dim=256, text_dim=512):  # ← 改为256
+#         super().__init__()
+        
+#         # RGB-D融合：256*2 → 256
+#         self.rgbd_fusion = nn.Sequential(
+#             nn.Conv2d(visual_dim * 2, visual_dim, 1),
+#             nn.BatchNorm2d(visual_dim),
+#             nn.ReLU()
+#         )
+        
+#         # 文本特征投影
+#         self.text_proj = nn.Linear(text_dim, visual_dim)
+        
+#     def forward(self, rgb_feat, depth_feat, text_feat):
+#         """
+#         Args:
+#             rgb_feat: [B, 256, H, W]
+#             depth_feat: [B, 256, H, W]
+#             text_feat: [B, 512]
+#         Returns:
+#             fused_feat: [B, 256, H, W]
+#         """
+#         B, C, H, W = rgb_feat.shape
+        
+#         # 1. RGB-D拼接融合
+#         rgbd_cat = torch.cat([rgb_feat, depth_feat], dim=1)  # [B,512,H,W]
+#         rgbd_fused = self.rgbd_fusion(rgbd_cat)              # [B,256,H,W]
+        
+#         # 2. 文本增强
+#         text_feat_proj = self.text_proj(text_feat)           # [B,256]
+#         text_feat_exp = text_feat_proj.unsqueeze(-1).unsqueeze(-1)
+#         text_weight = torch.sigmoid(text_feat_exp)
+#         enhanced_feat = rgbd_fused * (1 + text_weight)
+        
+#         return enhanced_feat  # [B,256,H,W]
+
 # models/fusion.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 class MultiModalFusion(nn.Module):
-    """三模态特征融合模块"""
-    def __init__(self, visual_dim=256, text_dim=512):  # ← 改为256
+    def __init__(self, visual_dim=256, text_dim=512):
         super().__init__()
         
-        # RGB-D融合：256*2 → 256
+        # RGB-D融合
         self.rgbd_fusion = nn.Sequential(
             nn.Conv2d(visual_dim * 2, visual_dim, 1),
             nn.BatchNorm2d(visual_dim),
             nn.ReLU()
         )
         
-        # 文本特征投影
+        # ===== 关键改进：文本引导的空间注意力 =====
         self.text_proj = nn.Linear(text_dim, visual_dim)
+        self.text_spatial_attn = nn.Sequential(
+            nn.Conv2d(visual_dim, visual_dim // 4, 1),
+            nn.ReLU(),
+            nn.Conv2d(visual_dim // 4, 1, 1),
+            nn.Sigmoid()
+        )
         
     def forward(self, rgb_feat, depth_feat, text_feat):
-        """
-        Args:
-            rgb_feat: [B, 256, H, W]
-            depth_feat: [B, 256, H, W]
-            text_feat: [B, 512]
-        Returns:
-            fused_feat: [B, 256, H, W]
-        """
         B, C, H, W = rgb_feat.shape
         
-        # 1. RGB-D拼接融合
-        rgbd_cat = torch.cat([rgb_feat, depth_feat], dim=1)  # [B,512,H,W]
-        rgbd_fused = self.rgbd_fusion(rgbd_cat)              # [B,256,H,W]
+        # 1. RGB-D融合
+        rgbd_cat = torch.cat([rgb_feat, depth_feat], dim=1)
+        rgbd_fused = self.rgbd_fusion(rgbd_cat)  # [B,256,H,W]
         
-        # 2. 文本增强
-        text_feat_proj = self.text_proj(text_feat)           # [B,256]
-        text_feat_exp = text_feat_proj.unsqueeze(-1).unsqueeze(-1)
-        text_weight = torch.sigmoid(text_feat_exp)
-        enhanced_feat = rgbd_fused * (1 + text_weight)
+        # 2. 文本语义投影
+        text_proj = self.text_proj(text_feat)  # [B,256]
         
-        return enhanced_feat  # [B,256,H,W]
+        # ===== 关键改进：文本调制RGBD特征 =====
+        # 通道调制
+        text_channel_weight = torch.sigmoid(text_proj).view(B, C, 1, 1)
+        modulated_feat = rgbd_fused * text_channel_weight
+        
+        # 空间注意力（文本引导哪些区域重要）
+        text_guided_feat = modulated_feat + text_proj.view(B, C, 1, 1)
+        spatial_attn = self.text_spatial_attn(text_guided_feat)  # [B,1,H,W]
+        
+        # 最终融合
+        enhanced_feat = rgbd_fused * spatial_attn + modulated_feat
+        
+        return enhanced_feat

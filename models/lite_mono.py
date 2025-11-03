@@ -320,6 +320,7 @@ class LiteMono(nn.Module):
             self.stages.append(nn.Sequential(*blocks))
 
     def forward_features(self, x):
+        x = x.float()
         x = (x - 0.45) / 0.225
         feats = []
         for i in range(3):

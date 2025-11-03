@@ -142,6 +142,7 @@ import torch
 from torch.utils.data import Dataset
 import numpy as np
 from torchvision import transforms as T
+from torchvision import transforms
 
 train_transform = T.Compose([
     T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
@@ -252,3 +253,89 @@ def preprocess_depth(path, tgt_size=256):
     dep = cv2.resize(dep, (tgt_size, tgt_size))
     dep = dep / (dep.max() + 1e-6)
     return torch.from_numpy(dep).unsqueeze(0)
+class RGBDTextTestDataset(torch.utils.data.Dataset):
+    """
+    用于复赛/初赛测试集推理的Dataset。
+    目录结构：
+    test_root/
+        ├── Seq1/
+        │   ├── color/
+        │   ├── depth/
+        │   └── nlp.txt
+        ├── Seq2/
+        │   ├── color/
+        │   ├── depth/
+        │   └── nlp.txt
+        ...
+    """
+    def __init__(self, data_root):
+        self.data_root = data_root
+        self.seq_dirs = sorted([
+            os.path.join(data_root, d)
+            for d in os.listdir(data_root)
+            if os.path.isdir(os.path.join(data_root, d))
+        ])
+
+        self.samples = []
+        for seq_path in self.seq_dirs:
+            color_dir = os.path.join(seq_path, "color")
+            depth_dir = os.path.join(seq_path, "depth")
+            nlp_path = os.path.join(seq_path, "nlp.txt")
+
+            if not os.path.exists(color_dir) or not os.path.exists(depth_dir):
+                continue
+
+            color_list = sorted(os.listdir(color_dir))
+            depth_list = sorted(os.listdir(depth_dir))
+
+            # 文本描述
+            if os.path.exists(nlp_path):
+                with open(nlp_path, "r", encoding="utf-8") as f:
+                    text = f.read().strip()
+            else:
+                text = ""
+
+            for i in range(len(color_list)):
+                self.samples.append({
+                    "seq_name": os.path.basename(seq_path),
+                    "color_path": os.path.join(color_dir, color_list[i]),
+                    "depth_path": os.path.join(depth_dir, depth_list[i]),
+                    "text": text,
+                })
+
+        print(f"✅ 测试集载入完毕，共 {len(self.samples)} 帧。")
+
+        # ✅ 定义 transform
+        self.rgb_transform = transforms.Compose([
+            transforms.Resize((256, 256)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406],
+                                 [0.229, 0.224, 0.225])
+        ])
+        self.depth_transform = transforms.Compose([
+            transforms.Resize((256, 256)),
+            transforms.ToTensor()
+        ])
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        sample = self.samples[idx]
+
+        # 读取 RGB 与 Depth
+        color_img = Image.open(sample["color_path"]).convert("RGB")
+        depth_img = Image.open(sample["depth_path"]).convert("L")
+
+        tpl_rgb = self.rgb_transform(color_img)
+        tpl_dep = self.depth_transform(depth_img)
+
+        # ✅ test.py 期望的字段名
+        return {
+            "template_rgb": tpl_rgb,
+            "template_depth": tpl_dep,
+            "search_rgb": tpl_rgb,       # test阶段可用同帧代替
+            "search_depth": tpl_dep,
+            "text": sample["text"],
+            "seq_name": sample["seq_name"]
+        }

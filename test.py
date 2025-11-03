@@ -190,150 +190,241 @@
 
 #     print('All results saved to results/')
 
-import os
-import glob
-import torch
-import numpy as np
-from PIL import Image
-from models.tracker_final import RGBDTextTracker
-from lib.dataset_fixed import preprocess_image, preprocess_depth
+# import os
+# import glob
+# import torch
+# import numpy as np
+# from PIL import Image
+# from models.tracker_final import RGBDTextTracker
+# from lib.dataset_fixed import preprocess_image, preprocess_depth
 
-def load_model(ckpt_path='best_final.pth', device='cuda'):
-    model = RGBDTextTracker().to(device)
-    model.load_state_dict(torch.load(ckpt_path, map_location=device))
-    model.eval()
-    return model
+# def load_model(ckpt_path='best_final.pth', device='cuda'):
+#     model = RGBDTextTracker().to(device)
+#     model.load_state_dict(torch.load(ckpt_path, map_location=device))
+#     model.eval()
+#     return model
 
-def process_sequence(model, seq_dir, output_path, device='cuda'):
-    """处理单个序列"""
-    rgb_frames = sorted(glob.glob(f"{seq_dir}/color/*.jpg"))
-    depth_frames = sorted(glob.glob(f"{seq_dir}/depth/*.png"))
-    text_file = f"{seq_dir}/nlp.txt"
-    gt_file = f"{seq_dir}/groundtruth_rect.txt"
+# def process_sequence(model, seq_dir, output_path, device='cuda'):
+#     """处理单个序列"""
+#     rgb_frames = sorted(glob.glob(f"{seq_dir}/color/*.jpg"))
+#     depth_frames = sorted(glob.glob(f"{seq_dir}/depth/*.png"))
+#     text_file = f"{seq_dir}/nlp.txt"
+#     gt_file = f"{seq_dir}/groundtruth_rect.txt"
     
-    if not rgb_frames or not depth_frames:
-        print(f"[WARNING] Empty sequence: {seq_dir}")
-        return
+#     if not rgb_frames or not depth_frames:
+#         print(f"[WARNING] Empty sequence: {seq_dir}")
+#         return
     
-    # 读取文本
-    with open(text_file, 'r') as f:
-        text = f.read().strip()
+#     # 读取文本
+#     with open(text_file, 'r') as f:
+#         text = f.read().strip()
     
-    # 读取初始GT
-    with open(gt_file, 'r') as f:
-        init_bbox = list(map(float, f.readline().strip().split(',')))
+#     # 读取初始GT
+#     with open(gt_file, 'r') as f:
+#         init_bbox = list(map(float, f.readline().strip().split(',')))
     
-    # 获取原始尺寸
-    orig_img = Image.open(rgb_frames[0])
-    orig_w, orig_h = orig_img.size
+#     # 获取原始尺寸
+#     orig_img = Image.open(rgb_frames[0])
+#     orig_w, orig_h = orig_img.size
     
-    # 第一帧作为模板
-    template_rgb = preprocess_image(rgb_frames[0]).unsqueeze(0).to(device)
-    template_depth = preprocess_depth(depth_frames[0]).unsqueeze(0).to(device)
+#     # 第一帧作为模板
+#     template_rgb = preprocess_image(rgb_frames[0]).unsqueeze(0).to(device)
+#     template_depth = preprocess_depth(depth_frames[0]).unsqueeze(0).to(device)
     
-    results = [init_bbox]  # 第一帧用GT
+#     results = [init_bbox]  # 第一帧用GT
     
-    with torch.no_grad():
-        prev_bbox_256 = [  # 转换初始GT到256尺度（供平滑用）
-            init_bbox[0] * 256 / orig_w,
-            init_bbox[1] * 256 / orig_h,
-            init_bbox[2] * 256 / orig_w,
-            init_bbox[3] * 256 / orig_h
-        ]
+#     with torch.no_grad():
+#         prev_bbox_256 = [  # 转换初始GT到256尺度（供平滑用）
+#             init_bbox[0] * 256 / orig_w,
+#             init_bbox[1] * 256 / orig_h,
+#             init_bbox[2] * 256 / orig_w,
+#             init_bbox[3] * 256 / orig_h
+#         ]
         
-        for i in range(1, len(rgb_frames)):
-            # 加载当前帧
-            search_rgb = preprocess_image(rgb_frames[i]).unsqueeze(0).to(device)
-            search_depth = preprocess_depth(depth_frames[i]).unsqueeze(0).to(device)
+#         for i in range(1, len(rgb_frames)):
+#             # 加载当前帧
+#             search_rgb = preprocess_image(rgb_frames[i]).unsqueeze(0).to(device)
+#             search_depth = preprocess_depth(depth_frames[i]).unsqueeze(0).to(device)
             
-            # 预测（输出是256尺度）
-            pred_bbox_256, _ = model(template_rgb, template_depth, [text], search_rgb, search_depth)
-            pred_bbox_256 = pred_bbox_256.cpu().numpy()[0]
+#             # 预测（输出是256尺度）
+#             pred_bbox_256, _ = model(template_rgb, template_depth, [text], search_rgb, search_depth)
+#             pred_bbox_256 = pred_bbox_256.cpu().numpy()[0]
             
-            # ===== 尺度平滑（防止突变） =====
-            max_scale_change = 1.3
-            w_ratio = pred_bbox_256[2] / (prev_bbox_256[2] + 1e-6)
-            h_ratio = pred_bbox_256[3] / (prev_bbox_256[3] + 1e-6)
+#             # ===== 尺度平滑（防止突变） =====
+#             max_scale_change = 1.3
+#             w_ratio = pred_bbox_256[2] / (prev_bbox_256[2] + 1e-6)
+#             h_ratio = pred_bbox_256[3] / (prev_bbox_256[3] + 1e-6)
             
-            if w_ratio > max_scale_change:
-                pred_bbox_256[2] = prev_bbox_256[2] * max_scale_change
-            elif w_ratio < 1/max_scale_change:
-                pred_bbox_256[2] = prev_bbox_256[2] / max_scale_change
+#             if w_ratio > max_scale_change:
+#                 pred_bbox_256[2] = prev_bbox_256[2] * max_scale_change
+#             elif w_ratio < 1/max_scale_change:
+#                 pred_bbox_256[2] = prev_bbox_256[2] / max_scale_change
                 
-            if h_ratio > max_scale_change:
-                pred_bbox_256[3] = prev_bbox_256[3] * max_scale_change
-            elif h_ratio < 1/max_scale_change:
-                pred_bbox_256[3] = prev_bbox_256[3] / max_scale_change
+#             if h_ratio > max_scale_change:
+#                 pred_bbox_256[3] = prev_bbox_256[3] * max_scale_change
+#             elif h_ratio < 1/max_scale_change:
+#                 pred_bbox_256[3] = prev_bbox_256[3] / max_scale_change
             
-            # ===== 位置平滑 =====
-            alpha = 0.7  # 平滑系数
-            pred_bbox_256[0] = alpha * pred_bbox_256[0] + (1-alpha) * prev_bbox_256[0]
-            pred_bbox_256[1] = alpha * pred_bbox_256[1] + (1-alpha) * prev_bbox_256[1]
+#             # ===== 位置平滑 =====
+#             alpha = 0.7  # 平滑系数
+#             pred_bbox_256[0] = alpha * pred_bbox_256[0] + (1-alpha) * prev_bbox_256[0]
+#             pred_bbox_256[1] = alpha * pred_bbox_256[1] + (1-alpha) * prev_bbox_256[1]
             
-            # ===== 转换回原图尺度 =====
-            scale_x = orig_w / 256.0
-            scale_y = orig_h / 256.0
-            pred_bbox_orig = [
-                pred_bbox_256[0] * scale_x,
-                pred_bbox_256[1] * scale_y,
-                pred_bbox_256[2] * scale_x,
-                pred_bbox_256[3] * scale_y
-            ]
+#             # ===== 转换回原图尺度 =====
+#             scale_x = orig_w / 256.0
+#             scale_y = orig_h / 256.0
+#             pred_bbox_orig = [
+#                 pred_bbox_256[0] * scale_x,
+#                 pred_bbox_256[1] * scale_y,
+#                 pred_bbox_256[2] * scale_x,
+#                 pred_bbox_256[3] * scale_y
+#             ]
             
-            # 边界检查
-            pred_bbox_orig[0] = max(0, min(pred_bbox_orig[0], orig_w - pred_bbox_orig[2]))
-            pred_bbox_orig[1] = max(0, min(pred_bbox_orig[1], orig_h - pred_bbox_orig[3]))
-            pred_bbox_orig[2] = max(1, min(pred_bbox_orig[2], orig_w - pred_bbox_orig[0]))
-            pred_bbox_orig[3] = max(1, min(pred_bbox_orig[3], orig_h - pred_bbox_orig[1]))
+#             # 边界检查
+#             pred_bbox_orig[0] = max(0, min(pred_bbox_orig[0], orig_w - pred_bbox_orig[2]))
+#             pred_bbox_orig[1] = max(0, min(pred_bbox_orig[1], orig_h - pred_bbox_orig[3]))
+#             pred_bbox_orig[2] = max(1, min(pred_bbox_orig[2], orig_w - pred_bbox_orig[0]))
+#             pred_bbox_orig[3] = max(1, min(pred_bbox_orig[3], orig_h - pred_bbox_orig[1]))
             
-            results.append(pred_bbox_orig)
-            prev_bbox_256 = pred_bbox_256
+#             results.append(pred_bbox_orig)
+#             prev_bbox_256 = pred_bbox_256
             
-            # ===== 自适应模板更新 =====
-            # 每10帧或置信度高时更新
-            if i % 10 == 0:
-                template_rgb = search_rgb.clone()
-                template_depth = search_depth.clone()
+#             # ===== 自适应模板更新 =====
+#             # 每10帧或置信度高时更新
+#             if i % 10 == 0:
+#                 template_rgb = search_rgb.clone()
+#                 template_depth = search_depth.clone()
     
-    # 保存结果
-    with open(output_path, 'w') as f:
-        for bbox in results:
-            f.write(f"{bbox[0]:.2f} {bbox[1]:.2f} {bbox[2]:.2f} {bbox[3]:.2f}\n")
+#     # 保存结果
+#     with open(output_path, 'w') as f:
+#         for bbox in results:
+#             f.write(f"{bbox[0]:.2f} {bbox[1]:.2f} {bbox[2]:.2f} {bbox[3]:.2f}\n")
     
-    print(f"[OK] {os.path.basename(seq_dir)}: {len(results)} frames")
+#     print(f"[OK] {os.path.basename(seq_dir)}: {len(results)} frames")
 
-def main():
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f"Using device: {device}")
+# def main():
+#     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+#     print(f"Using device: {device}")
     
-    model = load_model('best_final.pth', device)
+#     model = load_model('best_final.pth', device)
     
-    # 测试集路径
-    test_root = '/data/depth/aic25/test'
-    output_dir = 'results_final'
+#     # 测试集路径
+#     test_root = '/data/depth/aic25/test'
+#     output_dir = 'results_final'
+#     os.makedirs(output_dir, exist_ok=True)
+    
+#     # 处理所有测试序列
+#     test_seqs = sorted(glob.glob(f"{test_root}/*"))
+    
+#     print(f"\nProcessing {len(test_seqs)} sequences...")
+#     for seq_dir in test_seqs:
+#         if not os.path.isdir(seq_dir):
+#             continue
+        
+#         seq_name = os.path.basename(seq_dir)
+#         output_path = f"{output_dir}/{seq_name}.txt"
+        
+#         try:
+#             process_sequence(model, seq_dir, output_path, device)
+#         except Exception as e:
+#             print(f"[ERROR] {seq_name}: {e}")
+#             # 写入默认值避免提交失败
+#             with open(output_path, 'w') as f:
+#                 f.write("0.00 0.00 1.00 1.00\n")
+    
+#     print(f"\n✅ All done! Results saved to {output_dir}/")
+#     print(f"Now you can: cd {output_dir} && zip -r ../submission.zip *.txt")
+
+# if __name__ == "__main__":
+#     main()
+
+# ↑单卡
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "lib")))
+
+from lib.dataset import RGBDTextTestDataset
+
+import torch
+import time
+from tqdm import tqdm
+from torch.utils.data import DataLoader
+from models.tracker import RGBDTextTracker
+from dataset import RGBDTextTestDataset
+
+def test_fast(
+    data_root="/data/depth/aic25",
+    output_dir="results/",
+    batch_size=4,
+    num_workers=8,
+    use_amp=True,
+):
+    """高效双卡测试"""
+    torch.backends.cudnn.benchmark = True
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    print("🚀 Initializing RGBDTextTracker for fast testing...")
+
+    # 1. 加载模型
+    model = RGBDTextTracker()
+    ckpt = torch.load("/root/ost/RGBDTextTracker/best.pth", map_location=device)
+    state_dict = ckpt["model"] if "model" in ckpt else ckpt
+    model.load_state_dict(state_dict, strict=False)
+    model.eval()
+
+    # 2. 启用双卡并行
+    if torch.cuda.device_count() > 1:
+        print(f"🔧 Using {torch.cuda.device_count()} GPUs for inference")
+        model = torch.nn.DataParallel(model)
+    model = model.to(device)
+
+    # 3. 数据加载
+    dataset = RGBDTextTestDataset(data_root)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+        drop_last=False,
+    )
+
     os.makedirs(output_dir, exist_ok=True)
-    
-    # 处理所有测试序列
-    test_seqs = sorted(glob.glob(f"{test_root}/*"))
-    
-    print(f"\nProcessing {len(test_seqs)} sequences...")
-    for seq_dir in test_seqs:
-        if not os.path.isdir(seq_dir):
-            continue
-        
-        seq_name = os.path.basename(seq_dir)
-        output_path = f"{output_dir}/{seq_name}.txt"
-        
-        try:
-            process_sequence(model, seq_dir, output_path, device)
-        except Exception as e:
-            print(f"[ERROR] {seq_name}: {e}")
-            # 写入默认值避免提交失败
-            with open(output_path, 'w') as f:
-                f.write("0.00 0.00 1.00 1.00\n")
-    
-    print(f"\n✅ All done! Results saved to {output_dir}/")
-    print(f"Now you can: cd {output_dir} && zip -r ../submission.zip *.txt")
+
+    print("✅ Model & Data Ready, Start Inference ...")
+    start_time = time.time()
+
+    with torch.no_grad():
+        for batch in tqdm(dataloader, ncols=100):
+            tpl_rgb = batch["template_rgb"].to(device, non_blocking=True)
+            tpl_dep = batch["template_depth"].to(device, non_blocking=True)
+            srh_rgb = batch["search_rgb"].to(device, non_blocking=True)
+            srh_dep = batch["search_depth"].to(device, non_blocking=True)
+            text = batch["text"]
+
+            # AMP 加速推理
+            if use_amp:
+                with torch.cuda.amp.autocast():
+                    pred_bbox, _ = model(tpl_rgb, tpl_dep, text, srh_rgb, srh_dep)
+            else:
+                pred_bbox, _ = model(tpl_rgb, tpl_dep, text, srh_rgb, srh_dep)
+
+            # 保存预测
+            for i, bbox in enumerate(pred_bbox):
+                vid, frame_id = batch["video_id"][i], batch["frame_id"][i]
+                save_path = os.path.join(output_dir, f"{vid}.txt")
+                with open(save_path, "a") as f:
+                    x, y, w, h = bbox.tolist()
+                    f.write(f"{frame_id},{x:.2f},{y:.2f},{w:.2f},{h:.2f}\n")
+
+    total_time = time.time() - start_time
+    print(f"\n🏁 Done! Total time: {total_time/60:.1f} min "
+          f"({len(dataset)/(total_time):.2f} FPS total)\n")
 
 if __name__ == "__main__":
-    main()
+    test_fast(
+        data_root="/data/depth/aic25",  # 你的测试集路径
+        output_dir="results_final/",
+        batch_size=16,                  # 关键！多卡加大batch
+        num_workers=16,
+        use_amp=True
+    )

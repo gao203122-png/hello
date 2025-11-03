@@ -339,92 +339,380 @@
 #     main()
 
 # ↑单卡
-import sys, os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "lib")))
+# import sys, os
+# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "lib")))
 
-from lib.dataset import RGBDTextTestDataset
+# from lib.dataset import RGBDTextTestDataset
 
+# import torch
+# import time
+# from tqdm import tqdm
+# from torch.utils.data import DataLoader
+# from models.tracker import RGBDTextTracker
+# from dataset import RGBDTextTestDataset
+
+# def test_fast(
+#     data_root="/data/depth/aic25",
+#     output_dir="results/",
+#     batch_size=4,
+#     num_workers=8,
+#     use_amp=True,
+# ):
+#     """高效双卡测试"""
+#     torch.backends.cudnn.benchmark = True
+#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+#     print("🚀 Initializing RGBDTextTracker for fast testing...")
+
+#     # 1. 加载模型
+#     model = RGBDTextTracker()
+#     ckpt = torch.load("/root/ost/RGBDTextTracker/best.pth", map_location=device)
+#     state_dict = ckpt["model"] if "model" in ckpt else ckpt
+#     model.load_state_dict(state_dict, strict=False)
+#     model.eval()
+
+#     # 2. 启用双卡并行
+#     if torch.cuda.device_count() > 1:
+#         print(f"🔧 Using {torch.cuda.device_count()} GPUs for inference")
+#         model = torch.nn.DataParallel(model)
+#     model = model.to(device)
+
+#     # 3. 数据加载
+#     dataset = RGBDTextTestDataset(data_root)
+#     dataloader = DataLoader(
+#         dataset,
+#         batch_size=batch_size,
+#         shuffle=False,
+#         num_workers=num_workers,
+#         pin_memory=True,
+#         drop_last=False,
+#     )
+
+#     os.makedirs(output_dir, exist_ok=True)
+
+#     print("✅ Model & Data Ready, Start Inference ...")
+#     start_time = time.time()
+
+#     with torch.no_grad():
+#         for batch in tqdm(dataloader, ncols=100):
+#             tpl_rgb = batch["template_rgb"].to(device, non_blocking=True)
+#             tpl_dep = batch["template_depth"].to(device, non_blocking=True)
+#             srh_rgb = batch["search_rgb"].to(device, non_blocking=True)
+#             srh_dep = batch["search_depth"].to(device, non_blocking=True)
+#             text = batch["text"]
+
+#             # AMP 加速推理
+#             if use_amp:
+#                 with torch.cuda.amp.autocast():
+#                     pred_bbox, _ = model(tpl_rgb, tpl_dep, text, srh_rgb, srh_dep)
+#             else:
+#                 pred_bbox, _ = model(tpl_rgb, tpl_dep, text, srh_rgb, srh_dep)
+
+#             # 保存预测
+#             for i, bbox in enumerate(pred_bbox):
+#                 vid, frame_id = batch["video_id"][i], batch["frame_id"][i]
+#                 save_path = os.path.join(output_dir, f"{vid}.txt")
+#                 with open(save_path, "a") as f:
+#                     x, y, w, h = bbox.tolist()
+#                     f.write(f"{frame_id},{x:.2f},{y:.2f},{w:.2f},{h:.2f}\n")
+
+#     total_time = time.time() - start_time
+#     print(f"\n🏁 Done! Total time: {total_time/60:.1f} min "
+#           f"({len(dataset)/(total_time):.2f} FPS total)\n")
+
+# if __name__ == "__main__":
+#     test_fast(
+#         data_root="/data/depth/aic25",  # 你的测试集路径
+#         output_dir="results_final/",
+#         batch_size=16,                  # 关键！多卡加大batch
+#         num_workers=16,
+#         use_amp=True
+#     )
+
+
+# import sys, os
+# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), ".")))
+
+# import torch
+# import time
+# from tqdm import tqdm
+# from torch.utils.data import DataLoader
+# from models.tracker import RGBDTextTracker
+# from lib.dataset import RGBDTextTestDataset
+# import numpy as np
+# import glob
+
+# def test_fast(
+#     data_root="/data/depth/test",
+#     output_dir="results/",
+#     batch_size=8,
+#     num_workers=8,
+#     use_amp=True,
+# ):
+#     """高效测试"""
+#     torch.backends.cudnn.benchmark = True
+#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+#     print("🚀 Initializing RGBDTextTracker for fast testing...")
+
+#     # 1. 加载模型
+#     model = RGBDTextTracker()
+#     ckpt = torch.load("/root/ost/RGBDTextTracker/best.pth", map_location=device)
+    
+#     # ✅ 处理可能的权重格式
+#     if isinstance(ckpt, dict) and "model" in ckpt:
+#         state_dict = ckpt["model"]
+#     elif isinstance(ckpt, dict) and "state_dict" in ckpt:
+#         state_dict = ckpt["state_dict"]
+#     else:
+#         state_dict = ckpt
+    
+#     # ✅ 移除 DataParallel 包装（如果有）
+#     from collections import OrderedDict
+#     new_state_dict = OrderedDict()
+#     for k, v in state_dict.items():
+#         name = k.replace("module.", "") if k.startswith("module.") else k
+#         new_state_dict[name] = v
+    
+#     model.load_state_dict(new_state_dict, strict=False)
+#     model.eval()
+
+#     # 2. 启用双卡并行
+#     if torch.cuda.device_count() > 1:
+#         print(f"🔧 Using {torch.cuda.device_count()} GPUs for inference")
+#         model = torch.nn.DataParallel(model)
+#     model = model.to(device)
+
+#     # 3. 按序列处理（而非batch）
+#     os.makedirs(output_dir, exist_ok=True)
+    
+#     # ✅ 获取所有序列
+#     seq_dirs = sorted([
+#         os.path.join(data_root, d) 
+#         for d in os.listdir(data_root) 
+#         if os.path.isdir(os.path.join(data_root, d))
+#     ])
+    
+#     print(f"✅ Found {len(seq_dirs)} sequences")
+#     print("✅ Model & Data Ready, Start Inference ...")
+#     start_time = time.time()
+
+#     with torch.no_grad():
+#         for seq_path in tqdm(seq_dirs, desc="Processing", ncols=100):
+#             seq_name = os.path.basename(seq_path)
+            
+#             # 读取序列信息
+#             # ✅ 自动递归找 color/depth 文件夹，无论层次
+#             rgb_frames = sorted(glob.glob(os.path.join(seq_path, "**/color/*.*"), recursive=True))
+#             depth_frames = sorted(glob.glob(os.path.join(seq_path, "**/depth/*.*"), recursive=True))
+
+#             # ✅ 调试输出：确认每个序列找到多少帧
+#             print(f"🎯 {seq_name}: {len(rgb_frames)} RGB, {len(depth_frames)} Depth")
+
+#             if len(rgb_frames) == 0 or len(depth_frames) == 0:
+#                 print(f"[WARN] Empty sequence: {seq_name}")
+#                 continue
+
+#             # 读取文本
+#             text_file = f"{seq_path}/nlp.txt"
+#             with open(text_file, 'r') as f:
+#                 text = f.read().strip()
+            
+#             # 读取初始bbox
+#             gt_file = f"{seq_path}/groundtruth.txt"
+#             with open(gt_file, 'r') as f:
+#                 init_bbox = list(map(float, f.readline().strip().split(',')))
+            
+#             # 获取原图尺寸
+#             from PIL import Image
+#             orig_img = Image.open(rgb_frames[0])
+#             orig_w, orig_h = orig_img.size
+            
+#             # 预处理第一帧作为模板
+#             from lib.dataset import preprocess_image, preprocess_depth
+#             template_rgb = preprocess_image(rgb_frames[0]).unsqueeze(0).to(device)
+#             template_depth = preprocess_depth(depth_frames[0]).unsqueeze(0).to(device)
+            
+#             results = [init_bbox]  # 第一帧用GT
+            
+#             # 逐帧预测
+#             for i in range(1, len(rgb_frames)):
+#                 search_rgb = preprocess_image(rgb_frames[i]).unsqueeze(0).to(device)
+#                 search_depth = preprocess_depth(depth_frames[i]).unsqueeze(0).to(device)
+                
+#                 # AMP 加速
+#                 if use_amp:
+#                     with torch.cuda.amp.autocast():
+#                         pred_bbox_norm, _ = model(template_rgb, template_depth, [text], search_rgb, search_depth)
+#                 else:
+#                     pred_bbox_norm, _ = model(template_rgb, template_depth, [text], search_rgb, search_depth)
+                
+#                 # ✅ 转换到原图尺度
+#                 pred_bbox_norm = pred_bbox_norm.cpu().numpy()[0]  # [0-1] 归一化
+#                 pred_bbox = [
+#                     pred_bbox_norm[0] * orig_w,
+#                     pred_bbox_norm[1] * orig_h,
+#                     pred_bbox_norm[2] * orig_w,
+#                     pred_bbox_norm[3] * orig_h
+#                 ]
+                
+#                 # 边界检查
+#                 pred_bbox[0] = max(0, min(pred_bbox[0], orig_w - pred_bbox[2]))
+#                 pred_bbox[1] = max(0, min(pred_bbox[1], orig_h - pred_bbox[3]))
+#                 pred_bbox[2] = max(1, min(pred_bbox[2], orig_w - pred_bbox[0]))
+#                 pred_bbox[3] = max(1, min(pred_bbox[3], orig_h - pred_bbox[1]))
+                
+#                 results.append(pred_bbox)
+                
+#                 # 每10帧更新模板
+#                 if i % 10 == 0:
+#                     template_rgb = search_rgb.clone()
+#                     template_depth = search_depth.clone()
+            
+#             # 保存结果
+#             output_file = f"{output_dir}/{seq_name}.txt"
+#             with open(output_file, 'w') as f:
+#                 for bbox in results:
+#                     f.write(f"{bbox[0]:.2f} {bbox[1]:.2f} {bbox[2]:.2f} {bbox[3]:.2f}\n")
+
+#     total_time = time.time() - start_time
+#     print(f"\n🏁 Done! Total time: {total_time/60:.1f} min\n")
+
+# if __name__ == "__main__":
+#     test_fast(
+#         data_root="/data/depth/test",
+#         output_dir="results_final/",
+#         batch_size=8,
+#         num_workers=8,
+#         use_amp=True
+#     )
+
+import sys, os, glob, time
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), ".")))
+import re
 import torch
-import time
+from PIL import Image
+import numpy as np
 from tqdm import tqdm
-from torch.utils.data import DataLoader
 from models.tracker import RGBDTextTracker
-from dataset import RGBDTextTestDataset
+from lib.dataset import preprocess_image, preprocess_depth
 
-def test_fast(
-    data_root="/data/depth/aic25",
-    output_dir="results/",
-    batch_size=4,
-    num_workers=8,
-    use_amp=True,
+def test_fast_single(
+    data_root="/data/depth/test",
+    output_dir="results_final/",
+    model_path="/root/ost/RGBDTextTracker/best.pth",
 ):
-    """高效双卡测试"""
+    """单卡高效推理版（稳定快速，15~20分钟内完成）"""
     torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.enabled = True
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    print("🚀 Initializing RGBDTextTracker for fast testing...")
+    print("🚀 Initializing model...")
+    model = RGBDTextTracker().to(device)
+    ckpt = torch.load(model_path, map_location=device)
 
-    # 1. 加载模型
-    model = RGBDTextTracker()
-    ckpt = torch.load("/root/ost/RGBDTextTracker/best.pth", map_location=device)
-    state_dict = ckpt["model"] if "model" in ckpt else ckpt
-    model.load_state_dict(state_dict, strict=False)
-    model.eval()
+    # 支持多种权重格式
+    if isinstance(ckpt, dict):
+        if "model" in ckpt:
+            ckpt = ckpt["model"]
+        elif "state_dict" in ckpt:
+            ckpt = ckpt["state_dict"]
 
-    # 2. 启用双卡并行
-    if torch.cuda.device_count() > 1:
-        print(f"🔧 Using {torch.cuda.device_count()} GPUs for inference")
-        model = torch.nn.DataParallel(model)
-    model = model.to(device)
-
-    # 3. 数据加载
-    dataset = RGBDTextTestDataset(data_root)
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True,
-        drop_last=False,
-    )
+    # 去除 "module." 前缀
+    from collections import OrderedDict
+    new_state_dict = OrderedDict()
+    for k, v in ckpt.items():
+        name = k.replace("module.", "") if k.startswith("module.") else k
+        new_state_dict[name] = v
+    model.load_state_dict(new_state_dict, strict=False)
+    model.eval().half()
 
     os.makedirs(output_dir, exist_ok=True)
+    print(f"⚙️ Using FP16 + cudnn.benchmark, writing results to {output_dir}")
 
-    print("✅ Model & Data Ready, Start Inference ...")
+    seq_dirs = sorted([
+        os.path.join(data_root, d)
+        for d in os.listdir(data_root)
+        if os.path.isdir(os.path.join(data_root, d))
+    ])
+    print(f"✅ Found {len(seq_dirs)} sequences")
     start_time = time.time()
 
     with torch.no_grad():
-        for batch in tqdm(dataloader, ncols=100):
-            tpl_rgb = batch["template_rgb"].to(device, non_blocking=True)
-            tpl_dep = batch["template_depth"].to(device, non_blocking=True)
-            srh_rgb = batch["search_rgb"].to(device, non_blocking=True)
-            srh_dep = batch["search_depth"].to(device, non_blocking=True)
-            text = batch["text"]
+        for seq_path in tqdm(seq_dirs, desc="Processing", ncols=100):
+            seq_name = os.path.basename(seq_path)
+            def get_all_images(folder):
+                files = []
+                for ext in ["jpg", "jpeg", "png", "bmp", "JPG", "PNG", "JPEG"]:
+                    files.extend(glob.glob(os.path.join(folder, f"**/*.{ext}"), recursive=True))
+                files = sorted(files, key=lambda x: int(re.sub(r'\D', '', os.path.basename(x)) or 0))
+                return files
 
-            # AMP 加速推理
-            if use_amp:
+            rgb_frames = get_all_images(os.path.join(seq_path, "color"))
+            depth_frames = get_all_images(os.path.join(seq_path, "depth"))
+
+
+            text_file = f"{seq_path}/nlp.txt"
+            gt_file = f"{seq_path}/groundtruth.txt"
+
+            if not (os.path.exists(text_file) and os.path.exists(gt_file) and rgb_frames and depth_frames):
+                print(f"[WARN] Skipped {seq_name}, missing files")
+                continue
+
+            with open(text_file, "r") as f:
+                text = f.read().strip()
+            with open(gt_file, "r") as f:
+                init_bbox = list(map(float, f.readline().strip().split(",")))
+
+            orig_img = Image.open(rgb_frames[0])
+            orig_w, orig_h = orig_img.size
+
+            # 模板帧
+            tpl_rgb = preprocess_image(rgb_frames[0]).unsqueeze(0).to(device, non_blocking=True).half()
+            tpl_dep = preprocess_depth(depth_frames[0]).unsqueeze(0).to(device, non_blocking=True).half()
+
+            results = [init_bbox]
+
+            for i in range(1, len(rgb_frames)):
+                srgb = preprocess_image(rgb_frames[i]).unsqueeze(0).to(device, non_blocking=True).half()
+                sdep = preprocess_depth(depth_frames[i]).unsqueeze(0).to(device, non_blocking=True).half()
+
                 with torch.cuda.amp.autocast():
-                    pred_bbox, _ = model(tpl_rgb, tpl_dep, text, srh_rgb, srh_dep)
-            else:
-                pred_bbox, _ = model(tpl_rgb, tpl_dep, text, srh_rgb, srh_dep)
+                    pred_bbox_norm, _ = model(tpl_rgb, tpl_dep, [text], srgb, sdep)
 
-            # 保存预测
-            for i, bbox in enumerate(pred_bbox):
-                vid, frame_id = batch["video_id"][i], batch["frame_id"][i]
-                save_path = os.path.join(output_dir, f"{vid}.txt")
-                with open(save_path, "a") as f:
-                    x, y, w, h = bbox.tolist()
-                    f.write(f"{frame_id},{x:.2f},{y:.2f},{w:.2f},{h:.2f}\n")
+                pred_bbox_norm = pred_bbox_norm.cpu().numpy()[0]
+                pred_bbox = [
+                    pred_bbox_norm[0] * orig_w,
+                    pred_bbox_norm[1] * orig_h,
+                    pred_bbox_norm[2] * orig_w,
+                    pred_bbox_norm[3] * orig_h,
+                ]
 
-    total_time = time.time() - start_time
-    print(f"\n🏁 Done! Total time: {total_time/60:.1f} min "
-          f"({len(dataset)/(total_time):.2f} FPS total)\n")
+                # 边界检查
+                pred_bbox[0] = max(0, min(pred_bbox[0], orig_w - pred_bbox[2]))
+                pred_bbox[1] = max(0, min(pred_bbox[1], orig_h - pred_bbox[3]))
+                pred_bbox[2] = max(1, min(pred_bbox[2], orig_w - pred_bbox[0]))
+                pred_bbox[3] = max(1, min(pred_bbox[3], orig_h - pred_bbox[1]))
+
+                results.append(pred_bbox)
+
+                # 每10帧更新模板
+                if i % 10 == 0:
+                    tpl_rgb = srgb.clone()
+                    tpl_dep = sdep.clone()
+
+            # 保存结果
+            out_path = os.path.join(output_dir, f"{seq_name}.txt")
+            with open(out_path, "w") as f:
+                for b in results:
+                    f.write(f"{b[0]:.2f} {b[1]:.2f} {b[2]:.2f} {b[3]:.2f}\n")
+
+    print(f"\n🏁 Done! Total time: {(time.time()-start_time)/60:.1f} min")
+
 
 if __name__ == "__main__":
-    test_fast(
-        data_root="/data/depth/aic25",  # 你的测试集路径
+    test_fast_single(
+        data_root="/data/depth/test",
         output_dir="results_final/",
-        batch_size=16,                  # 关键！多卡加大batch
-        num_workers=16,
-        use_amp=True
+        model_path="/root/ost/RGBDTextTracker/best.pth",
     )

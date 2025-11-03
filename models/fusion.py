@@ -159,27 +159,80 @@
 
 #         return enhanced_feat
 
-# models/fusion.py
+# # models/fusion.py
+# import torch
+# import torch.nn as nn
+# import torch.nn.functional as F
+
+# class MultiModalFusion(nn.Module):
+#     """RGB-D-Text 三模态融合模块（推理 & 竞赛版稳定实现）"""
+#     def __init__(self, visual_dim=256, text_dim=512):
+#         super().__init__()
+        
+#         # 1. RGB-D融合: [B,512,H,W] -> [B,256,H,W]
+#         self.rgbd_fusion = nn.Sequential(
+#             nn.Conv2d(visual_dim * 2, visual_dim, 1),
+#             nn.BatchNorm2d(visual_dim),
+#             nn.ReLU(inplace=True)
+#         )
+        
+#         # 2. 文本特征投影: [B,512] -> [B,256]
+#         self.text_proj = nn.Linear(text_dim, visual_dim)
+
+#         # 3. 文本引导的空间注意力
+#         self.text_spatial_attn = nn.Sequential(
+#             nn.Conv2d(visual_dim, visual_dim // 4, 1),
+#             nn.ReLU(inplace=True),
+#             nn.Conv2d(visual_dim // 4, 1, 1),
+#             nn.Sigmoid()
+#         )
+
+#     def forward(self, rgb_feat, depth_feat, text_feat):
+#         """
+#         Args:
+#             rgb_feat: [B,256,H,W]
+#             depth_feat: [B,256,H,W]
+#             text_feat: [B,512]
+#         """
+#         B, C, H, W = rgb_feat.shape
+        
+#         # (1) RGB-D融合
+#         rgbd_cat = torch.cat([rgb_feat, depth_feat], dim=1)  # [B,512,H,W]
+#         rgbd_fused = self.rgbd_fusion(rgbd_cat)              # [B,256,H,W]
+
+#         # (2) 文本语义调制
+#         text_proj = self.text_proj(text_feat)                # [B,256]
+#         text_channel_weight = torch.sigmoid(text_proj).view(B, C, 1, 1)
+#         modulated_feat = rgbd_fused * (1 + text_channel_weight)
+
+#         # (3) 文本引导的空间注意力
+#         spatial_attn = self.text_spatial_attn(modulated_feat)  # [B,1,H,W]
+
+#         # (4) 最终融合
+#         enhanced_feat = modulated_feat * (1 + spatial_attn)
+
+#         return enhanced_feat
+# models/fusion.py - 修复版
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 class MultiModalFusion(nn.Module):
-    """RGB-D-Text 三模态融合模块（推理 & 竞赛版稳定实现）"""
+    """RGB-D-Text 三模态融合模块"""
     def __init__(self, visual_dim=256, text_dim=512):
         super().__init__()
         
-        # 1. RGB-D融合: [B,512,H,W] -> [B,256,H,W]
+        # RGB-D融合: [B,512,H,W] -> [B,256,H,W]
         self.rgbd_fusion = nn.Sequential(
             nn.Conv2d(visual_dim * 2, visual_dim, 1),
             nn.BatchNorm2d(visual_dim),
             nn.ReLU(inplace=True)
         )
         
-        # 2. 文本特征投影: [B,512] -> [B,256]
-        self.text_proj = nn.Linear(text_dim, visual_dim)
+        # ✅ 修复：文本投影到 visual_dim (256)
+        self.text_proj = nn.Linear(text_dim, visual_dim)  # 512->256
 
-        # 3. 文本引导的空间注意力
+        # 文本引导的空间注意力
         self.text_spatial_attn = nn.Sequential(
             nn.Conv2d(visual_dim, visual_dim // 4, 1),
             nn.ReLU(inplace=True),
@@ -193,22 +246,29 @@ class MultiModalFusion(nn.Module):
             rgb_feat: [B,256,H,W]
             depth_feat: [B,256,H,W]
             text_feat: [B,512]
+        Returns:
+            enhanced_feat: [B,256,H,W]
         """
         B, C, H, W = rgb_feat.shape
         
-        # (1) RGB-D融合
+        # 1. RGB-D融合
         rgbd_cat = torch.cat([rgb_feat, depth_feat], dim=1)  # [B,512,H,W]
         rgbd_fused = self.rgbd_fusion(rgbd_cat)              # [B,256,H,W]
 
-        # (2) 文本语义调制
-        text_proj = self.text_proj(text_feat)                # [B,256]
-        text_channel_weight = torch.sigmoid(text_proj).view(B, C, 1, 1)
+        # 2. 文本语义投影
+        text_proj = self.text_proj(text_feat)  # [B,512] -> [B,256]
+        
+        # ✅ 修复：确保 text_proj 是 [B, 256]
+        assert text_proj.shape == (B, C), f"text_proj shape {text_proj.shape} != ({B}, {C})"
+        
+        # 3. 通道调制
+        text_channel_weight = torch.sigmoid(text_proj).view(B, C, 1, 1)  # ✅ 现在正确了
         modulated_feat = rgbd_fused * (1 + text_channel_weight)
 
-        # (3) 文本引导的空间注意力
+        # 4. 空间注意力
         spatial_attn = self.text_spatial_attn(modulated_feat)  # [B,1,H,W]
 
-        # (4) 最终融合
+        # 5. 最终融合
         enhanced_feat = modulated_feat * (1 + spatial_attn)
 
         return enhanced_feat
